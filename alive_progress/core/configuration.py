@@ -31,6 +31,13 @@ def _int_input_factory(lower, upper):
 
     return _input
 
+def _float_input_factory(lower, upper):
+    def _input(x):
+        if lower <= float(x) <= upper:
+            return float(x)
+    
+    return _input
+
 
 def _bool_input_factory():
     def _input(x):
@@ -49,6 +56,7 @@ CONFIG_VARS = dict(
     manual=_bool_input_factory(),
     enrich_print=_bool_input_factory(),
     title_length=_int_input_factory(0, 100),
+    eta_smoothing_factor=_float_input_factory(0, 1)
 )
 
 Config = namedtuple('Config', tuple(CONFIG_VARS.keys()))

@@ -11,7 +11,7 @@ from itertools import chain, islice, repeat
 
 from .configuration import config_handler
 from .logging_hook import install_logging_hook, uninstall_logging_hook
-from .timing import gen_simple_exponential_smoothing_eta, to_elapsed_text, to_eta_text
+from .timing import gen_simple_exponential_smoothing_eta, to_elapsed_text, to_eta_text, gen_exponential_discounted_eta
 from .utils import clear_traces, hide_cursor, render_title, sanitize_text_marking_wide_chars, \
     show_cursor, terminal_columns
 from ..animations.utils import spinner_player
@@ -89,7 +89,8 @@ def alive_bar(total=None, title=None, calibrate=None, **options):
     """
     if total is not None:
         if not isinstance(total, int):
-            raise TypeError("integer argument expected, got '{}'.".format(type(total).__name__))
+            raise TypeError(
+                "integer argument expected, got '{}'.".format(type(total).__name__))
         if total <= 0:
             total = None
     config = config_handler(**options)
@@ -167,7 +168,8 @@ def alive_bar(total=None, title=None, calibrate=None, **options):
             print_buffer.extend(islice(gen, 1, None))
         else:
             header = header_template.format(run.count)
-            nested = ''.join(line or ' ' * len(header) for line in print_buffer)
+            nested = ''.join(line or ' ' * len(header)
+                             for line in print_buffer)
             with print_lock:
                 clear_traces()
                 sys.__stdout__.write('{}{}\n'.format(header, nested))
@@ -214,14 +216,22 @@ def alive_bar(total=None, title=None, calibrate=None, **options):
 
     if total or config.manual:  # we can track progress and therefore eta.
         spec = '({{:.1{}}}/s, eta: {{}})'.format(rate_spec)
-        gen_eta = gen_simple_exponential_smoothing_eta(.5, logic_total)
+        if config.eta_smoothing_factor:
+            gen_eta = gen_exponential_discounted_eta(
+                config.eta_smoothing_factor, logic_total)
+        else:
+            gen_eta = gen_simple_exponential_smoothing_eta(.5, logic_total)
         gen_eta.send(None)
-        stats = lambda: spec.format(run.rate, to_eta_text(gen_eta.send((current(), run.rate))))
+        def stats():
+            elapsed = time.time() - run.init
+            eta, current_rate = gen_eta.send((current(), elapsed))
+            return spec.format(current_rate, to_eta_text(eta))
         bar_repr = config.bar(config.length)
     else:  # unknown progress.
         bar_repr = config.unknown(config.length, config.bar)
-        stats = lambda: '({:.1f}/s)'.format(run.rate)  # noqa
-    stats_end = lambda: '({:.2{}}/s)'.format(run.rate, rate_spec)  # noqa
+        def stats(): return '({:.1f}/s)'.format(run.rate)  # noqa
+
+    def stats_end(): return '({:.2{}}/s)'.format(run.rate, rate_spec)  # noqa
 
     # calibration of the dynamic fps engine.
     # I've started with the equation y = log10(x + m) * k + n, where:
@@ -234,8 +244,10 @@ def alive_bar(total=None, title=None, calibrate=None, **options):
     # neat! ;)
     min_fps, max_fps = 2., 60.
     calibrate = max(0., calibrate or factor)
-    adjust_log_curve = 100. / min(calibrate, 100.)  # adjust curve for small numbers
-    factor = (max_fps - min_fps) / math.log10((calibrate * adjust_log_curve) + 1.)
+    # adjust curve for small numbers
+    adjust_log_curve = 100. / min(calibrate, 100.)
+    factor = (max_fps - min_fps) / \
+        math.log10((calibrate * adjust_log_curve) + 1.)
 
     def fps():
         if run.rate <= 0:
@@ -255,18 +267,19 @@ def alive_bar(total=None, title=None, calibrate=None, **options):
             def update_hook():
                 run.percent = run.count / total
 
-        monitor = lambda: '{}{}/{} [{:.0%}]'.format(  # noqa
+        def monitor(): return '{}{}/{} [{:.0%}]'.format(  # noqa
             '(!) ' if end and run.count != total else '', run.count, total, run.percent
         )
     elif config.manual:
-        update_hook = lambda: None  # noqa
-        monitor = lambda: '{}{:.0%}'.format(  # noqa
+        def update_hook(): return None  # noqa
+
+        def monitor(): return '{}{:.0%}'.format(  # noqa
             '(!) ' if end and run.percent != 1. else '', run.percent
         )
     else:
         run.percent = 1.
-        update_hook = lambda: None  # noqa
-        monitor = lambda: '{}'.format(run.count)  # noqa
+        def update_hook(): return None  # noqa
+        def monitor(): return '{}'.format(run.count)  # noqa
 
     title = render_title(title, config.title_length)
     start_monitoring()
